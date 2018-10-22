@@ -2,13 +2,14 @@ package main
 
 import (
 	"flag"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/log"
 )
 
 const (
@@ -23,24 +24,34 @@ var (
 )
 
 type Exporter struct {
-	jstatPath  string
-	targetPid  string
-	newMax     prometheus.Gauge
-	newCommit  prometheus.Gauge
-	oldMax     prometheus.Gauge
-	oldCommit  prometheus.Gauge
-	metaMax    prometheus.Gauge
-	metaCommit prometheus.Gauge
-	metaUsed   prometheus.Gauge
-	oldUsed    prometheus.Gauge
-	sv0Used    prometheus.Gauge
-	sv1Used    prometheus.Gauge
-	edenUsed   prometheus.Gauge
-	fgcTimes   prometheus.Counter
-	fgcSec     prometheus.Gauge
+	jstatPath    string
+	targetPid    string
+	newMax       prometheus.Gauge
+	newCommit    prometheus.Gauge
+	oldMax       prometheus.Gauge
+	oldCommit    prometheus.Gauge
+	metaMax      prometheus.Gauge
+	metaCommit   prometheus.Gauge
+	metaUsed     prometheus.Gauge
+	oldUsed      prometheus.Gauge
+	sv0Used      prometheus.Gauge
+	sv1Used      prometheus.Gauge
+	edenUsed     prometheus.Gauge
+	fgcTimes     prometheus.Counter
+	lastFgcTimes float64
+	fgcSec       prometheus.Gauge
+	ygcTimes     prometheus.Counter
+	lastYgcTimes float64
+	ygcSec       prometheus.Gauge
+	gcSec        prometheus.Gauge
 }
 
 func NewExporter(jstatPath string, targetPid string) *Exporter {
+	if strings.HasPrefix(targetPid, "/") && strings.HasSuffix(targetPid, ".pid") {
+		if pid, err := ioutil.ReadFile(targetPid); err == nil {
+			targetPid = strings.TrimSpace(string(pid))
+		}
+	}
 	return &Exporter{
 		jstatPath: jstatPath,
 		targetPid: targetPid,
@@ -104,10 +115,27 @@ func NewExporter(jstatPath string, targetPid string) *Exporter {
 			Name:      "fgcTimes",
 			Help:      "fgcTimes",
 		}),
+		lastFgcTimes: 0.0,
 		fgcSec: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "fgcSec",
 			Help:      "fgcSec",
+		}),
+		ygcTimes: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ygcTimes",
+			Help:      "ygcTimes",
+		}),
+		lastYgcTimes: 0.0,
+		ygcSec: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "ygcSec",
+			Help:      "ygcSec",
+		}),
+		gcSec: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "gcSec",
+			Help:      "gcSec",
 		}),
 	}
 }
@@ -127,6 +155,9 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.edenUsed.Describe(ch)
 	e.fgcTimes.Describe(ch)
 	e.fgcSec.Describe(ch)
+	e.ygcTimes.Describe(ch)
+	e.ygcSec.Describe(ch)
+	e.gcSec.Describe(ch)
 }
 
 // Collect implements the prometheus.Collector interface.
@@ -255,18 +286,45 @@ func (e *Exporter) JstatGc(ch chan<- prometheus.Metric) {
 	for i, line := range strings.Split(string(out), "\n") {
 		if i == 1 {
 			parts := strings.Fields(line)
+			//ygcTimes
+			ygcTimes, err := strconv.ParseFloat(parts[12], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			e.ygcTimes.Add(ygcTimes - e.lastYgcTimes)
+			e.ygcTimes.Collect(ch)
+			e.lastYgcTimes = ygcTimes
+			ygcSec, err := strconv.ParseFloat(parts[13], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.ygcSec.Set(ygcSec)
+			e.ygcSec.Collect(ch)
+
+			// fgcTimes
 			fgcTimes, err := strconv.ParseFloat(parts[14], 64)
 			if err != nil {
 				log.Fatal(err)
 			}
-			e.fgcTimes.Set(fgcTimes)
+
+			e.fgcTimes.Add(fgcTimes - e.lastFgcTimes)
 			e.fgcTimes.Collect(ch)
+			e.lastFgcTimes = fgcTimes
 			fgcSec, err := strconv.ParseFloat(parts[15], 64)
 			if err != nil {
 				log.Fatal(err)
 			}
 			e.fgcSec.Set(fgcSec)
 			e.fgcSec.Collect(ch)
+
+			//gcTime
+			gcSec, err := strconv.ParseFloat(parts[16], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.gcSec.Set(gcSec)
+			e.gcSec.Collect(ch)
 		}
 	}
 }
