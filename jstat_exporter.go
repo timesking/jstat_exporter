@@ -3,13 +3,13 @@ package main
 import (
 	"flag"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/timesking/jstat_exporter/log"
 )
 
 const (
@@ -34,9 +34,15 @@ type Exporter struct {
 	metaCommit   prometheus.Gauge
 	metaUsed     prometheus.Gauge
 	oldUsed      prometheus.Gauge
+	oldCap       prometheus.Gauge
+
 	sv0Used      prometheus.Gauge
+	sv0Cap       prometheus.Gauge
 	sv1Used      prometheus.Gauge
+	sv1Cap       prometheus.Gauge
 	edenUsed     prometheus.Gauge
+	edenCap      prometheus.Gauge
+
 	fgcTimes     prometheus.Counter
 	lastFgcTimes float64
 	fgcSec       prometheus.Gauge
@@ -50,7 +56,16 @@ func NewExporter(jstatPath string, targetPid string) *Exporter {
 	if strings.HasPrefix(targetPid, "/") && strings.HasSuffix(targetPid, ".pid") {
 		if pid, err := ioutil.ReadFile(targetPid); err == nil {
 			targetPid = strings.TrimSpace(string(pid))
+			log.Info("Got PID from file: ", targetPid)
 		}
+	} else if strings.HasPrefix(targetPid, "#") {
+		targetPidCmd := strings.Trim(targetPid, "#")
+		out, err := exec.Command("/bin/bash", "-c", targetPidCmd).Output()
+		if err != nil {
+			log.Fatal(err)
+		}
+		targetPid = strings.TrimSpace(string(out))
+		log.Info("Got PID", targetPid, ", from command: ", targetPidCmd)
 	}
 	return &Exporter{
 		jstatPath: jstatPath,
@@ -95,21 +110,42 @@ func NewExporter(jstatPath string, targetPid string) *Exporter {
 			Name:      "oldUsed",
 			Help:      "oldUsed",
 		}),
+		oldCap: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "oldCap",
+			Help:      "oldCap",
+		}),		
 		sv0Used: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "sv0Used",
 			Help:      "sv0Used",
 		}),
+		sv0Cap: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "sv0Cap",
+			Help:      "sv0Cap",
+		}),		
 		sv1Used: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "sv1Used",
 			Help:      "sv1Used",
 		}),
+		sv1Cap: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "sv1Cap",
+			Help:      "sv1Cap",
+		}),		
 		edenUsed: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "edenUsed",
 			Help:      "edenUsed",
 		}),
+		edenCap: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "edenCap",
+			Help:      "edenCap",
+		}),
+
 		fgcTimes: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "fgcTimes",
@@ -150,9 +186,15 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.metaCommit.Describe(ch)
 	e.metaUsed.Describe(ch)
 	e.oldUsed.Describe(ch)
+	e.oldCap.Describe(ch)
+
 	e.sv0Used.Describe(ch)
+	e.sv0Cap.Describe(ch)
 	e.sv1Used.Describe(ch)
+	e.sv1Cap.Describe(ch)
 	e.edenUsed.Describe(ch)
+	e.edenCap.Describe(ch)
+
 	e.fgcTimes.Describe(ch)
 	e.fgcSec.Describe(ch)
 	e.ygcTimes.Describe(ch)
@@ -240,6 +282,12 @@ func (e *Exporter) JstatGcold(ch chan<- prometheus.Metric) {
 			}
 			e.oldUsed.Set(oldUsed) // OU: Old space utilization (kB).
 			e.oldUsed.Collect(ch)
+			oldCap, err := strconv.ParseFloat(parts[4], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.oldCap.Set(oldCap) // OC: Old space utilization (kB).
+			e.oldCap.Collect(ch)			
 		}
 	}
 }
@@ -260,18 +308,39 @@ func (e *Exporter) JstatGcnew(ch chan<- prometheus.Metric) {
 			}
 			e.sv0Used.Set(sv0Used)
 			e.sv0Used.Collect(ch)
+			sv0Cap, err := strconv.ParseFloat(parts[0], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.sv0Cap.Set(sv0Cap)
+			e.sv0Cap.Collect(ch)
+
 			sv1Used, err := strconv.ParseFloat(parts[3], 64)
 			if err != nil {
 				log.Fatal(err)
 			}
 			e.sv1Used.Set(sv1Used)
 			e.sv1Used.Collect(ch)
+			sv1Cap, err := strconv.ParseFloat(parts[1], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.sv1Cap.Set(sv1Cap)
+			e.sv1Cap.Collect(ch)			
+
+		
 			edenUsed, err := strconv.ParseFloat(parts[8], 64)
 			if err != nil {
 				log.Fatal(err)
 			}
 			e.edenUsed.Set(edenUsed)
 			e.edenUsed.Collect(ch)
+			edenCap, err := strconv.ParseFloat(parts[7], 64)
+			if err != nil {
+				log.Fatal(err)
+			}
+			e.edenCap.Set(edenCap)
+			e.edenCap.Collect(ch)				
 		}
 	}
 }
